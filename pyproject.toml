@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=70.0.0", "wheel", "Cython>=3.0.0", "numpy>=2.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronosmatch"
+version = "1.0.0"
+description = "Zero-Copy High-Frequency Trading Simulation Engine with Cython Matching and Shared-Memory IPC"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Quantitative Systems Architecture Team" }
+]
+dependencies = [
+    "cython>=3.0.0",
+    "numpy>=2.0.0",
+    "rich>=13.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
