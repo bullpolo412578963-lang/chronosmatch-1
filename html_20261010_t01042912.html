@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ChronosMatch — Zero-Copy Trading Engine</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          'bg-base':    '#0a0e17',
+          'bg-panel':   '#0f1420',
+          'bg-raised':  '#141a28',
+          'bg-hover':   '#1a2235',
+          'border':     '#1f2937',
+          'border-2':   '#263044',
+          'txt-1':      '#e6edf7',
+          'txt-2':      '#9aa7bd',
+          'txt-3':      '#5c6a82',
+          'buy':        '#10b981',
+          'buy-dim':    '#065f46',
+          'sell':       '#ef4444',
+          'sell-dim':   '#7f1d1d',
+          'accent':     '#3b82f6',
+          'warn':       '#f59e0b',
+        },
+        fontFamily: {
+          'mono': ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          'sans': ['Inter', 'system-ui', 'sans-serif'],
+        }
+      }
+    }
+  }
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html, body { background: #0a0e17; color: #e6edf7; font-family: 'Inter', system-ui, sans-serif; }
+  .font-mono, .mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0f1420; }
+  ::-webkit-scrollbar-thumb { background: #263044; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #374151; }
+  .row-flash-buy  { animation: flashBuy  0.6s ease-out; }
+  .row-flash-sell { animation: flashSell 0.6s ease-out; }
+  @keyframes flashBuy  { 0% { background: rgba(16,185,129,0.25); } 100% { background: transparent; } }
+  @keyframes flashSell { 0% { background: rgba(239,68,68,0.25); } 100% { background: transparent; } }
+  .pulse-dot { animation: pulseDot 1.6s ease-in-out infinite; }
+  @keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .skeleton {
+    background: linear-gradient(90deg, #141a28 0%, #1a2235 50%, #141a28 100%);
+    background-size: 200% 100%;
+    animation: skeleton 1.4s ease-in-out infinite;
+  }
+  @keyframes skeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .tab-active { color: #e6edf7; border-bottom-color: #3b82f6; }
+  .kpi-value { font-feature-settings: "tnum"; }
+  .depth-bar-buy  { background: linear-gradient(to left, rgba(16,185,129,0.22), rgba(16,185,129,0.04)); }
+  .depth-bar-sell { background: linear-gradient(to right, rgba(239,68,68,0.22), rgba(239,68,68,0.04)); }
+  .divider-hair { height: 1px; background: #1f2937; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+  .badge-demo { background: rgba(245,158,11,0.12); color: #f59e0b; border: 1px solid rgba(245,158,11,0.3); }
+  .badge-live { background: rgba(16,185,129,0.12); color: #10b981; border: 1px solid rgba(16,185,129,0.3); }
+  .badge-off  { background: rgba(107,114,128,0.15); color: #9ca3af; border: 1px solid rgba(107,114,128,0.3); }
+  .tooltip { position: relative; }
+  .tooltip::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%);
+    background: #1a2235; color: #e6edf7; padding: 4px 8px; border-radius: 4px;
+    font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none;
+    transition: opacity 0.15s; border: 1px solid #263044; z-index: 50;
+  }
+  .tooltip:hover::after { opacity: 1; }
+  button:focus-visible, a:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+</style>
+</head>
+<body class="antialiased">
+
+<div class="h-screen flex flex-col overflow-hidden">
+
+  <!-- ============ TOP NAV ============ -->
+  <header class="h-12 bg-bg-panel border-b border-border flex items-center justify-between px-4 shrink-0">
+    <div class="flex items-center gap-5">
+      <div class="flex items-center gap-2">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15 14"/>
+        </svg>
+        <span class="font-semibold tracking-tight text-txt-1">ChronosMatch</span>
+        <span class="hidden md:inline text-[11px] text-txt-3 border-l border-border pl-3 ml-1">Zero-Copy Trading Engine</span>
+      </div>
+      <nav class="hidden lg:flex items-center gap-1 text-xs">
+        <button data-nav="overview"    class="nav-btn px-3 py-1.5 rounded text-txt-2 hover:text-txt-1 hover:bg-bg-hover">Overview</button>
+        <button data-nav="orderbook"   class="nav-btn px-3 py-1.5 rounded text-txt-2 hover:text-txt-1 hover:bg-bg-hover">Order Book</button>
+        <button data-nav="trades"      class="nav-btn px-3 py-1.5 rounded text-txt-2 hover:text-txt-1 hover:bg-bg-hover">Trades</button>
+        <button data-nav="performance" class="nav-btn px-3 py-1.5 rounded text-txt-2 hover:text-txt-1 hover:bg-bg-hover">Performance</button>
+        <button data-nav="system"      class="nav-btn px-3 py-1.5 rounded text-txt-2 hover:text-txt-1 hover:bg-bg-hover">System</button>
+      </nav>
+    </div>
+    <div class="flex items-center gap-4">
+      <span id="dataBadge" class="badge badge-demo">● DEMO DATA</span>
+      <div class="hidden md:flex items-center gap-3 text-[11px]">
+        <div class="flex items-center gap-1.5 tooltip" data-tip="Matching Engine">
+          <span class="w-1.5 h-1.5 rounded-full bg-buy pulse-dot"></span>
+          <span class="text-txt-2">Engine</span>
+        </div>
+        <div class="flex items-center gap-1.5 tooltip" data-tip="Market Simulator">
+          <span class="w-1.5 h-1.5 rounded-full bg-buy pulse-dot"></span>
+          <span class="text-txt-2">Simulator</span>
+        </div>
+        <div class="flex items-center gap-1.5 tooltip" data-tip="WebSocket Connection">
+          <span id="wsDot" class="w-1.5 h-1.5 rounded-full bg-warn"></span>
+          <span id="wsLabel" class="text-txt-2">Local</span>
+        </div>
+      </div>
+      <div class="divider-hair w-px h-5 bg-border hidden md:block"></div>
+      <div id="clock" class="font-mono text-[11px] text-txt-2 tabular-nums">--:--:--</div>
+    </div>
+  </header>
+
+  <!-- ============ MAIN BODY ============ -->
+  <div class="flex-1 flex overflow-hidden">
+
+    <!-- ============ SIDEBAR (mobile collapsible) ============ -->
+    <aside class="w-14 lg:w-48 bg-bg-panel border-r border-border flex flex-col shrink-0">
+      <div class="flex-1 py-3 space-y-1">
+        <button data-nav="overview"    class="nav-btn w-full flex items-center gap-3 px-3 py-2 text-sm text-txt-2 hover:text-txt-1 hover:bg-bg-hover rounded-sm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          <span class="hidden lg:inline">Overview</span>
+        </button>
+        <button data-nav="orderbook"   class="nav-btn w-full flex items-center gap-3 px-3 py-2 text-sm text-txt-2 hover:text-txt-1 hover:bg-bg-hover rounded-sm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          <span class="hidden lg:inline">Order Book</span>
+        </button>
+        <button data-nav="trades"      class="nav-btn w-full flex items-center gap-3 px-3 py-2 text-sm text-txt-2 hover:text-txt-1 hover:bg-bg-hover rounded-sm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+          <span class="hidden lg:inline">Trades</span>
+        </button>
+        <button data-nav="performance" class="nav-btn w-full flex items-center gap-3 px-3 py-2 text-sm text-txt-2 hover:text-txt-1 hover:bg-bg-hover rounded-sm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span class="hidden lg:inline">Performance</span>
+        </button>
+        <button data-nav="system"      class="nav-btn w-full flex items-center gap-3 px-3 py-2 text-sm text-txt-2 hover:text-txt-1 hover:bg-bg-hover rounded-sm">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span class="hidden lg:inline">System</span>
+        </button>
+      </div>
+      <div class="p-3 border-t border-border">
+        <button id="simToggle" class="w-full flex items-center justify-center gap-2 px-2 py-1.5 text-xs font-medium bg-buy/10 text-buy border border-buy/30 hover:bg-buy/20 rounded transition">
+          <span id="simIcon">■</span>
+          <span id="simLabel">Running</span>
+        </button>
+        <div class="mt-2 text-[10px] text-txt-3 text-center hidden lg:block">v1.0.0 · build 2026.10</div>
+      </div>
+    </aside>
+
+    <!-- ============ CONTENT ============ -->
+    <main class="flex-1 overflow-y-auto">
+
+      <!-- Header strip -->
+      <div class="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3 bg-bg-panel">
+        <div>
+          <div class="flex items-center gap-3">
+            <h1 id="pageTitle" class="text-lg font-semibold text-txt-1">Overview</h1>
+            <span class="text-[11px] text-txt-3">·</span>
+            <span id="pageSub" class="text-xs text-txt-3">Real-time engine monitoring</span>
+          </div>
+        </div>
+        <div class="flex items-center gap-4 text-[11px] text-txt-3 font-mono">
+          <span>Last update: <span id="lastUpdate" class="text-txt-2">--</span></span>
+          <span>Uptime: <span id="uptime" class="text-txt-2">0s</span></span>
+        </div>
+      </div>
+
+      <!-- ============ VIEW: OVERVIEW ============ -->
+      <section id="view-overview" class="view p-5 space-y-5">
+
+        <!-- KPIs -->
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">Orders / sec</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-ops" class="kpi-value text-xl font-bold text-txt-1 font-mono">--</span>
+              <span class="text-[10px] text-txt-3">ops</span>
+            </div>
+          </div>
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">Avg Latency</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-avg" class="kpi-value text-xl font-bold text-txt-1 font-mono">--</span>
+              <span class="text-[10px] text-txt-3">µs</span>
+            </div>
+          </div>
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">P99 Latency</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-p99" class="kpi-value text-xl font-bold text-warn font-mono">--</span>
+              <span class="text-[10px] text-txt-3">µs</span>
+            </div>
+          </div>
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">Total Orders</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-total" class="kpi-value text-xl font-bold text-txt-1 font-mono">--</span>
+            </div>
+          </div>
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">Matched</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-matched" class="kpi-value text-xl font-bold text-buy font-mono">--</span>
+            </div>
+          </div>
+          <div class="kpi bg-bg-panel border border-border rounded p-3">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] uppercase tracking-wider text-txt-3 font-medium">Active Orders</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5c6a82" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            </div>
+            <div class="mt-2 flex items-baseline gap-1">
+              <span id="kpi-active" class="kpi-value text-xl font-bold text-txt-1 font-mono">--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Price / Spread strip -->
+        <div class="bg-bg-panel border border-border rounded flex items-center justify-between px-4 py-2.5">
+          <div class="flex items-center gap-6">
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-txt-3">Best Bid</div>
+              <div id="bestBid" class="font-mono text-sm font-semibold text-buy">--</div>
+            </div>
+            <div class="divider-hair w-px h-8 bg-border"></div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-txt-3">Mid</div>
+              <div id="midPrice" class="font-mono text-sm font-semibold text-txt-1">--</div>
+            </div>
+            <div class="divider-hair w-px h-8 bg-border"></div>
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-txt-3">Best Ask</div>
+              <div id="bestAsk" class="font-mono text-sm font-semibold text-sell">--</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-6">
+            <div class="text-right">
+              <div class="text-[10px] uppercase tracking-wider text-txt-3">Spread</div>
+              <div id="spread" class="font-mono text-sm font-semibold text-txt-1">--</div>
+            </div>
+            <div class="text-right">
+              <div class="text-[10px] uppercase tracking-wider text-txt-3">Spread %</div>
+              <div id="spreadPct" class="font-mono text-sm font-semibold text-txt-2">--</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Main grid: Order book + Chart + Trades -->
+        <div class="grid grid-cols-12 gap-4">
+
+          <!-- Order Book -->
+          <div class="col-span-12 lg:col-span-3 bg-bg-panel border border-border rounded flex flex-col" style="min-height: 520px;">
+            <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+              <span class="text-xs font-semibold text-txt-2 uppercase tracking-wider">Order Book</span>
+              <span class="text-[10px] text-txt-3">Depth 15</span>
+            </div>
+            <div class="grid grid-cols-4 text-[10px] text-txt-3 uppercase tracking-wider px-3 py-1.5 border-b border-border">
+              <span>Price</span>
+              <span class="text-right">Size</span>
+              <span class="text-right">Total</span>
+              <span class="text-right">Orders</span>
+            </div>
+            <div id="asksContainer" class="flex-1 flex flex-col justify-end overflow-hidden"></div>
+            <div id="spreadBar" class="px-3 py-1.5 bg-bg-raised border-y border-border flex items-center justify-between text-xs">
+              <span id="spreadBarMid" class="font-mono font-semibold text-txt-1">--</span>
+              <span id="spreadBarVal" class="font-mono text-txt-3">--</span>
+            </div>
+            <div id="bidsContainer" class="flex-1 overflow-hidden"></div>
+          </div>
+
+          <!-- Latency chart -->
+          <div class="col-span-12 lg:col-span-6 bg-bg-panel border border-border rounded flex flex-col" style="min-height: 520px;">
+            <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="text-xs font-semibold text-txt-2 uppercase tracking-wider">Latency Monitor</span>
+                <span class="text-[10px] text-txt-3">µs · last 500 samples</span>
+              </div>
+              <div class="flex items-center gap-3 text-[11px] font-mono">
+                <span class="text-txt-3">LATEST</span>
+                <span id="latLatest" class="text-txt-1 font-semibold">--</span>
+                <span class="text-txt-3 ml-2">AVG</span>
+                <span id="latAvg" class="text-txt-1 font-semibold">--</span>
+              </div>
+            </div>
+            <div id="latencyChart" class="flex-1 min-h-0"></div>
+          </div>
+
+          <!-- Recent trades -->
+          <div class="col-span-12 lg:col-span-3 bg-bg-panel border border-border rounded flex flex-col" style="min-height: 520px;">
+            <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+              <span class="text-xs font-semibold text-txt-2 uppercase tracking-wider">Recent Trades</span>
+              <span id="tradeCount" class="text-[10px] text-txt-3">0</span>
+            </div>
+            <div class="grid grid-cols-4 text-[10px] text-txt-3 uppercase tracking-wider px-3 py-1.5 border-b border-border">
+              <span>Price</span>
+              <span class="text-right">Size</span>
+              <span class="text-right">Lat</span>
+              <span class="text-right">Time</span>
+            </div>
+            <div id="tradesContainer" class="flex-1 overflow-y-auto"></div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ============ VIEW: ORDER BOOK (full) ============ -->
+      <section id="view-orderbook" class="view hidden p-5 space-y-4">
+        <div class="bg-bg-panel border border-border rounded">
+          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div>
+              <div class="text-sm font-semibold text-txt-1">Full Order Book</div>
+              <div class="text-[11px] text-txt-3">Price-time priority · cumulative depth</div>
+            </div>
+            <div class="flex items-center gap-2 text-[11px]">
+              <span class="text-txt-3">Depth:</span>
+              <select id="depthSelect" class="bg-bg-raised border border-border text-txt-1 rounded px-2 py-1 text-xs">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 divide-x divide-border">
+            <div>
+              <div class="grid grid-cols-4 text-[10px] text-txt-3 uppercase tracking-wider px-3 py-1.5 border-b border-border bg-bg-raised">
+                <span>Orders</span>
+                <span class="text-right">Total</span>
+                <span class="text-right">Size</span>
+                <span class="text-right">Bid</span>
+              </div>
+              <div id="fullBids" class="max-h-[600px] overflow-y-auto"></div>
+            </div>
+            <div>
+              <div class="grid grid-cols-4 text-[10px] text-txt-3 uppercase tracking-wider px-3 py-1.5 border-b border-border bg-bg-raised">
+                <span>Ask</span>
+                <span class="text-right">Size</span>
+                <span class="text-right">Total</span>
+                <span class="text-right">Orders</span>
+              </div>
+              <div id="fullAsks" class="max-h-[600px] overflow-y-auto"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ VIEW: TRADES ============ -->
+      <section id="view-trades" class="view hidden p-5 space-y-4">
+        <div class="bg-bg-panel border border-border rounded">
+          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div>
+              <div class="text-sm font-semibold text-txt-1">Matched Trades</div>
+              <div class="text-[11px] text-txt-3">All executed trades with matching latency</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="fullTradeCount" class="text-[11px] text-txt-3 font-mono">0 trades</span>
+              <button id="clearTrades" class="text-[11px] text-txt-3 hover:text-txt-1 px-2 py-1 border border-border rounded hover:bg-bg-hover">Clear</button>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+              <thead class="text-[10px] text-txt-3 uppercase tracking-wider bg-bg-raised">
+                <tr>
+                  <th class="text-left px-3 py-2">Trade ID</th>
+                  <th class="text-left px-3 py-2">Buy Order</th>
+                  <th class="text-left px-3 py-2">Sell Order</th>
+                  <th class="text-right px-3 py-2">Price</th>
+                  <th class="text-right px-3 py-2">Quantity</th>
+                  <th class="text-right px-3 py-2">Latency (µs)</th>
+                  <th class="text-right px-3 py-2">Timestamp</th>
+                </tr>
+              </thead>
+              <tbody id="fullTradesBody" class="font-mono"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ VIEW: PERFORMANCE ============ -->
+      <section id="view-performance" class="view hidden p-5 space-y-4">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">Latest</div>
+            <div class="mt-1 font-mono text-lg font-bold text-txt-1"><span id="pLatest">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">Minimum</div>
+            <div class="mt-1 font-mono text-lg font-bold text-buy"><span id="pMin">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">Average</div>
+            <div class="mt-1 font-mono text-lg font-bold text-txt-1"><span id="pAvg">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">Maximum</div>
+            <div class="mt-1 font-mono text-lg font-bold text-sell"><span id="pMax">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">P95</div>
+            <div class="mt-1 font-mono text-lg font-bold text-txt-1"><span id="pP95">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+          <div class="bg-bg-panel border border-border rounded p-3">
+            <div class="text-[10px] uppercase tracking-wider text-txt-3">P99</div>
+            <div class="mt-1 font-mono text-lg font-bold text-warn"><span id="pP99">--</span> <span class="text-[10px] text-txt-3">µs</span></div>
+          </div>
+        </div>
+        <div class="bg-bg-panel border border-border rounded flex flex-col" style="height: 420px;">
+          <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+            <span class="text-xs font-semibold text-txt-2 uppercase tracking-wider">Latency Distribution</span>
+            <span class="text-[10px] text-txt-3">Histogram · last 1000 samples</span>
+          </div>
+          <div id="histChart" class="flex-1 min-h-0"></div>
+        </div>
+        <div class="bg-bg-panel border border-border rounded flex flex-col" style="height: 320px;">
+          <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+            <span class="text-xs font-semibold text-txt-2 uppercase tracking-wider">Throughput</span>
+            <span class="text-[10px] text-txt-3">orders/sec · rolling 60s</span>
+          </div>
+          <div id="throughputChart" class="flex-1 min-h-0"></div>
+        </div>
+      </section>
+
+      <!-- ============ VIEW: SYSTEM ============ -->
+      <section id="view-system" class="view hidden p-5 space-y-4">
+        <div class="grid grid-cols-12 gap-4">
+          <div class="col-span-12 lg:col-span-8 bg-bg-panel border border-border rounded">
+            <div class="px-4 py-3 border-b border-border">
+              <div class="text-sm font-semibold text-txt-1">Engine Status</div>
+              <div class="text-[11px] text-txt-3">Component health and connection state</div>
+            </div>
+            <div class="divide-y divide-border">
+              <div class="flex items-center justify-between px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <span class="w-2 h-2 rounded-full bg-buy pulse-dot"></span>
+                  <span class="text-sm text-txt-1">Matching Engine</span>
+                </div>
+                <span class="text-[11px] text-buy font-medium">RUNNING</span>
+              </div>
+              <div class="flex items-center justify-between px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <span class="w-2 h-2 rounded-full bg-buy pulse-dot"></span>
+                  <span class="text-sm text-txt-1">Market Simulator</span>
+                </div>
+                <span id="simStatus" class="text-[11px] text-buy font-medium">ACTIVE</span>
+              </div>
+              <div class="flex items-center justify-between px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <span class="w-2 h-2 rounded-full bg-buy pulse-dot"></span>
+                  <span class="text-sm text-txt-1">Shared Memory IPC</span>
+                </div>
+                <span class="text-[11px] text-buy font-medium">MAPPED</span>
+              </div>
+              <div class="flex items-center justify-between px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <span id="wsDot2" class="w-2 h-2 rounded-full bg-warn"></span>
+                  <span class="text-sm text-txt-1">WebSocket</span>
+                </div>
+                <span id="wsStatus2" class="text-[11px] text-warn font-medium">LOCAL DEMO</span>
+              </div>
+              <div class="flex items-center justify-between px-4 py-3">
+                <div class="flex items-center gap-3">
+                  <span class="w-2 h-2 rounded-full bg-buy"></span>
+                  <span class="text-sm text-txt-1">Order Book Algorithm</span>
+                </div>
+                <span class="text-[11px] text-txt-2 font-medium">PRICE-TIME PRIORITY</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-span-12 lg:col-span-4 bg-bg-panel border border-border rounded">
+            <div class="px-4 py-3 border-b border-border">
+              <div class="text-sm font-semibold text-txt-1">Runtime Counters</div>
+            </div>
+            <div class="p-4 space-y-3 text-xs">
+              <div class="flex justify-between"><span class="text-txt-3">Incoming rate</span><span id="sIncoming" class="font-mono text-txt-1">-- ops/s</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Processed rate</span><span id="sProcessed" class="font-mono text-txt-1">-- ops/s</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Matched trades</span><span id="sMatched" class="font-mono text-txt-1">--</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Open orders</span><span id="sOpen" class="font-mono text-txt-1">--</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Buffer utilization</span><span id="sBuffer" class="font-mono text-txt-1">-- %</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Error count</span><span id="sErrors" class="font-mono text-txt-1">0</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">Engine uptime</span><span id="sUptime" class="font-mono text-txt-1">--</span></div>
+              <div class="flex justify-between"><span class="text-txt-3">WS clients</span><span id="sClients" class="font-mono text-txt-1">1</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-bg-panel border border-border rounded">
+          <div class="px-4 py-3 border-b border-border">
+            <div class="text-sm font-semibold text-txt-1">Event Log</div>
+            <div class="text-[11px] text-txt-3">Last 50 engine events</div>
+          </div>
+          <div id="eventLog" class="p-2 max-h-80 overflow-y-auto font-mono text-[11px] space-y-0.5"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+/* =========================================================
+   ChronosMatch — Frontend (single-file, demo mode)
+   ---------------------------------------------------------
+   This file runs entirely in the browser with no backend.
+   It simulates a matching engine locally for demonstration.
+   ========================================================= */
+
+// ---------- STATE ----------
+const state = {
+  running: true,
+  startTime: Date.now(),
+  basePrice: 150.00,
+  tick: 0,
+  book: { bids: [], asks: [], mid: 150, spread: 0 },
+  trades: [],
+  latencySamples: [],
+  throughputSamples: [],
+  totalOrders: 0,
+  totalMatched: 0,
+  activeOrders: 0,
+  eventLog: [],
+  // Internal matching engine state
+  buyBook: new Map(),   // price -> [{id, qty, time}]
+  sellBook: new Map(),
+  nextOrderId: 1,
+  nextTradeId: 1,
+  lastTradePrice: 150.00,
+};
+
+// ---------- UTILITIES ----------
+const fmt  = (n, d=2) => n == null || isNaN(n) ? '--' : Number(n).toFixed(d);
+const fmtI = (n) => n == null ? '--' : Number(n).toLocaleString('en-US');
+const nowTs = () => {
+  const d = new Date();
+  return d.toLocaleTimeString('en-GB') + '.' + String(d.getMilliseconds()).padStart(3,'0');
+};
+const percentile = (arr, p) => {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a,b) => a-b);
+  const i = Math.floor((p/100) * (s.length - 1));
+  return s[i];
+};
+const logEvent = (type, msg) => {
+  state.eventLog.unshift({ t: nowTs(), type, msg });
+  if (state.eventLog.length > 50) state.eventLog.pop();
+};
+
+// ---------- SIMULATED MATCHING ENGINE ----------
+function generateOrder() {
+  // Random walk around last trade price
+  const drift = (Math.random() - 0.5) * 0.25;
+  const volatility = (Math.random() - 0.5) * 0.15;
+  const ref = state.lastTradePrice || state.basePrice;
+  const side = Math.random() < 0.5 ? 'BUY' : 'SELL';
+  // Aggressive orders cross the spread more often
+  const aggressive = Math.random() < 0.55;
+  let price;
+  if (aggressive) {
+    if (side === 'BUY')  price = ref + Math.abs(drift) + Math.random() * 0.05;
+    else                 price = ref - Math.abs(drift) - Math.random() * 0.05;
+  } else {
+    if (side === 'BUY')  price = ref - Math.random() * 0.20 - 0.01;
+    else                 price = ref + Math.random() * 0.20 + 0.01;
+  }
+  price = Math.round(price * 100) / 100;
+  const qty = (Math.floor(Math.random() * 50) + 1) * 100;
+  return { id: state.nextOrderId++, side, price, qty, time: performance.now() };
+}
+
+function processOrder(order) {
+  const t0 = performance.now();
+  state.totalOrders++;
+  let matched = false;
+
+  if (order.side === 'BUY') {
+    // Match against asks
+    while (order.qty > 0) {
+      const prices = [...state.sellBook.keys()].sort((a,b) => a-b);
+      if (!prices.length || prices[0] > order.price) break;
+      const best = prices[0];
+      const queue = state.sellBook.get(best);
+      while (order.qty > 0 && queue.length) {
+        const top = queue[0];
+        const fill = Math.min(order.qty, top.qty);
+        state.trades.unshift({
+          id: state.nextTradeId++,
+          buyId: order.id,
+          sellId: top.id,
+          price: best,
+          qty: fill,
+          time: Date.now(),
+          latency: 0, // filled below
+        });
+        state.totalMatched++;
+        state.lastTradePrice = best;
+        order.qty -= fill;
+        top.qty  -= fill;
+        matched = true;
+        if (top.qty === 0) queue.shift();
+      }
+      if (!queue.length) state.sellBook.delete(best);
+    }
+    if (order.qty > 0) {
+      if (!state.buyBook.has(order.price)) state.buyBook.set(order.price, []);
+      state.buyBook.get(order.price).push({ id: order.id, qty: order.qty, time: order.time });
+    }
+  } else {
+    while (order.qty > 0) {
+      const prices = [...state.buyBook.keys()].sort((a,b) => b-a);
+      if (!prices.length || prices[0] < order.price) break;
+      const best = prices[0];
+      const queue = state.buyBook.get(best);
+      while (order.qty > 0 && queue.length) {
+        const top = queue[0];
+        const fill = Math.min(order.qty, top.qty);
+        state.trades.unshift({
+          id: state.nextTradeId++,
+          buyId: top.id,
+          sellId: order.id,
+          price: best,
+          qty: fill,
+          time: Date.now(),
+          latency: 0,
+        });
+        state.totalMatched++;
+        state.lastTradePrice = best;
+        order.qty -= fill;
+        top.qty  -= fill;
+        matched = true;
+        if (top.qty === 0) queue.shift();
+      }
+      if (!queue.length) state.buyBook.delete(best);
+    }
+    if (order.qty > 0) {
+      if (!state.sellBook.has(order.price)) state.sellBook.set(order.price, []);
+      state.sellBook.get(order.price).push({ id: order.id, qty: order.qty, time: order.time });
+    }
+  }
+
+  // Latency in microseconds (simulated realistic HFT range)
+  let latUs = (performance.now() - t0) * 1000;
+  // Add realistic jitter: base 0.8-3.5 µs, occasional spikes
+  latUs = 0.8 + Math.random() * 2.5;
+  if (Math.random() < 0.02) latUs += Math.random() * 15; // occasional spike
+  if (state.latencySamples.length > 2000) state.latencySamples.shift();
+  state.latencySamples.push(latUs);
+
+  if (matched && state.trades[0]) state.trades[0].latency = latUs;
+
+  // Count active
+  let active = 0;
+  for (const q of state.buyBook.values())  active += q.length;
+  for (const q of state.sellBook.values()) active += q.length;
+  state.activeOrders = active;
+
+  return latUs;
+}
+
+function snapshotBook(depth = 20) {
+  const bids = [...state.buyBook.entries()]
+    .map(([p, q]) => ({ price: p, qty: q.reduce((s,o)=>s+o.qty,0), orders: q.length }))
+    .sort((a,b) => b.price - a.price)
+    .slice(0, depth);
+  const asks = [...state.sellBook.entries()]
+    .map(([p, q]) => ({ price: p, qty: q.reduce((s,o)=>s+o.qty,0), orders: q.length }))
+    .sort((a,b) => a.price - b.price)
+    .slice(0, depth);
+
+  // Cumulative
+  let cum = 0;
+  bids.forEach(b => { cum += b.qty; b.cum = cum; });
+  cum = 0;
+  asks.forEach(a => { cum += a.qty; a.cum = cum; });
+
+  const bestBid = bids[0]?.price ?? null;
+  const bestAsk = asks[0]?.price ?? null;
+  const mid = (bestBid != null && bestAsk != null) ? (bestBid + bestAsk) / 2 : state.lastTradePrice;
+  const spread = (bestBid != null && bestAsk != null) ? bestAsk - bestBid : 0;
+
+  state.book = { bids, asks, bestBid, bestAsk, mid, spread };
+}
+
+// ---------- CHARTS ----------
+let latChart, latSeries;
+let histChart, histSeries;
+let tpChart, tpSeries;
+
+function initCharts() {
+  const commonOpts = {
+    layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9aa7bd', fontFamily: 'JetBrains Mono, monospace', fontSize: 10 },
+    grid: { vertLines: { color: '#1a2235' }, horzLines: { color: '#1a2235' } },
+    timeScale: { timeVisible: true, secondsVisible: true, borderColor: '#1f2937', rightOffset: 4, barSpacing: 6 },
+    rightPriceScale: { borderColor: '#1f2937' },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true },
+    handleScale: { mouseWheel: true, pinch: true },
+  };
+
+  // Latency line
+  const latEl = document.getElementById('latencyChart');
+  if (latEl) {
+    latChart = LightweightCharts.createChart(latEl, { ...commonOpts, height: latEl.clientHeight || 460 });
+    latSeries = latChart.addAreaSeries({
+      topColor: 'rgba(59,130,246,0.35)',
+      bottomColor: 'rgba(59,130,246,0.02)',
+      lineColor: '#3b82f6',
+      lineWidth: 2,
+      priceFormat: { type: 'custom', minMove: 0.01, formatter: p => p.toFixed(2) + ' µs' },
+    });
+    new ResizeObserver(() => {
+      latChart.applyOptions({ width: latEl.clientWidth, height: latEl.clientHeight });
+    }).observe(latEl);
+  }
+
+  // Histogram (as bars)
+  const histEl = document.getElementById('histChart');
+  if (histEl) {
+    histChart = LightweightCharts.createChart(histEl, { ...commonOpts, height: histEl.clientHeight || 360 });
+    histSeries = histChart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      color: '#3b82f6',
+    });
+    new ResizeObserver(() => {
+      histChart.applyOptions({ width: histEl.clientWidth, height: histEl.clientHeight });
+    }).observe(histEl);
+  }
+
+  // Throughput
+  const tpEl = document.getElementById('throughputChart');
+  if (tpEl) {
+    tpChart = LightweightCharts.createChart(tpEl, { ...commonOpts, height: tpEl.clientHeight || 260 });
+    tpSeries = tpChart.addAreaSeries({
+      topColor: 'rgba(16,185,129,0.35)',
+      bottomColor: 'rgba(16,185,129,0.02)',
+      lineColor: '#10b981',
+      lineWidth: 2,
+      priceFormat: { type: 'custom', minMove: 1, formatter: p => p.toFixed(0) + ' ops' },
+    });
+    new ResizeObserver(() => {
+      tpChart.applyOptions({ width: tpEl.clientWidth, height: tpEl.clientHeight });
+    }).observe(tpEl);
+  }
+}
+
+// ---------- RENDER ----------
+function renderKPIs() {
+  const samples = state.latencySamples;
+  const avg = samples.length ? samples.reduce((a,b)=>a+b,0) / samples.length : 0;
+  const p99 = percentile(samples, 99);
+  const ops = samples.length > 1 ? (samples.length / ((Date.now() - state.startTime)/1000)) : 0;
+
+  document.getElementById('kpi-ops').textContent     = fmt(ops, 1);
+  document.getElementById('kpi-avg').textContent     = fmt(avg, 2);
+  document.getElementById('kpi-p99').textContent     = fmt(p99, 2);
+  document.getElementById('kpi-total').textContent   = fmtI(state.totalOrders);
+  document.getElementById('kpi-matched').textContent = fmtI(state.totalMatched);
+  document.getElementById('kpi-active').textContent  = fmtI(state.activeOrders);
+
+  // Price strip
+  document.getElementById('bestBid').textContent   = state.book.bestBid != null ? fmt(state.book.bestBid) : '--';
+  document.getElementById('bestAsk').textContent   = state.book.bestAsk != null ? fmt(state.book.bestAsk) : '--';
+  document.getElementById('midPrice').textContent  = fmt(state.book.mid);
+  document.getElementById('spread').textContent    = fmt(state.book.spread);
+  const pct = state.book.mid ? (state.book.spread / state.book.mid) * 100 : 0;
+  document.getElementById('spreadPct').textContent = fmt(pct, 3) + '%';
+}
+
+function renderOrderBookCompact() {
+  const asksEl = document.getElementById('asksContainer');
+  const bidsEl = document.getElementById('bidsContainer');
+  const spreadBarMid = document.getElementById('spreadBarMid');
+  const spreadBarVal = document.getElementById('spreadBarVal');
+  if (!asksEl || !bidsEl) return;
+
+  const maxCum = Math.max(
+    state.book.bids[state.book.bids.length-1]?.cum || 0,
+    state.book.asks[state.book.asks.length-1]?.cum || 0,
+    1
+  );
+
+  // Asks: reverse so lowest ask is at bottom (near spread)
+  const asksHtml = state.book.asks.slice().reverse().map(a => {
+    const w = (a.cum / maxCum) * 100;
+    return `<div class="relative grid grid-cols-4 text-[11px] px-3 py-[3px] font-mono">
+      <div class="absolute inset-y-0 right-0 depth-bar-sell" style="width:${w}%"></div>
+      <span class="relative text-sell">${fmt(a.price)}</span>
+      <span class="relative text-right text-txt-1">${fmtI(a.qty)}</span>
+      <span class="relative text-right text-txt-3">${fmtI(a.cum)}</span>
+      <span class="relative text-right text-txt-3">${a.orders}</span>
+    </div>`;
+  }).join('');
+  asksEl.innerHTML = asksHtml;
+
+  const bidsHtml = state.book.bids.map(b => {
+    const w = (b.cum / maxCum) * 100;
+    return `<div class="relative grid grid-cols-4 text-[11px] px-3 py-[3px] font-mono">
+      <div class="absolute inset-y-0 right-0 depth-bar-buy" style="width:${w}%"></div>
+      <span class="relative text-buy">${fmt(b.price)}</span>
+      <span class="relative text-right text-txt-1">${fmtI(b.qty)}</span>
+      <span class="relative text-right text-txt-3">${fmtI(b.cum)}</span>
+      <span class="relative text-right text-txt-3">${b.orders}</span>
+    </div>`;
+  }).join('');
+  bidsEl.innerHTML = bidsHtml;
+
+  spreadBarMid.textContent = fmt(state.book.mid);
+  spreadBarVal.textContent = 'Δ ' + fmt(state.book.spread);
+}
+
+function renderFullOrderBook() {
+  const depth = parseInt(document.getElementById('depthSelect')?.value || 20, 10);
+  snapshotBook(depth);
+  const maxCum = Math.max(
+    state.book.bids[state.book.bids.length-1]?.cum || 0,
+    state.book.asks[state.book.asks.length-1]?.cum || 0,
+    1
+  );
+  const fullBids = document.getElementById('fullBids');
+  const fullAsks = document.getElementById('fullAsks');
+  if (!fullBids || !fullAsks) return;
+
+  fullBids.innerHTML = state.book.bids.map(b => {
+    const w = (b.cum / maxCum) * 100;
+    return `<div class="relative grid grid-cols-4 text-[11px] px-3 py-[3px] font-mono border-b border-border/40">
+      <div class="absolute inset-y-0 left-0 depth-bar-buy" style="width:${w}%"></div>
+      <span class="relative text-right text-txt-3">${b.orders}</span>
+      <span class="relative text-right text-txt-2">${fmtI(b.cum)}</span>
+      <span class="relative text-right text-txt-1">${fmtI(b.qty)}</span>
+      <span class="relative text-right text-buy font-semibold">${fmt(b.price)}</span>
+    </div>`;
+  }).join('');
+
+  fullAsks.innerHTML = state.book.asks.map(a => {
+    const w = (a.cum / maxCum) * 100;
+    return `<div class="relative grid grid-cols-4 text-[11px] px-3 py-[3px] font-mono border-b border-border/40">
+      <div class="absolute inset-y-0 right-0 depth-bar-sell" style="width:${w}%"></div>
+      <span class="relative text-sell font-semibold">${fmt(a.price)}</span>
+      <span class="relative text-right text-txt-1">${fmtI(a.qty)}</span>
+      <span class="relative text-right text-txt-2">${fmtI(a.cum)}</span>
+      <span class="relative text-right text-txt-3">${a.orders}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderRecentTrades() {
+  const el = document.getElementById('tradesContainer');
+  const countEl = document.getElementById('tradeCount');
+  if (!el) return;
+  const recent = state.trades.slice(0, 60);
+  countEl.textContent = fmtI(state.totalMatched);
+  el.innerHTML = recent.map(t => {
+    const timeStr = new Date(t.time).toLocaleTimeString('en-GB', { hour12: false });
+    return `<div class="grid grid-cols-4 text-[11px] px-3 py-[3px] font-mono border-b border-border/30 hover:bg-bg-hover">
+      <span class="text-txt-1 font-semibold">${fmt(t.price)}</span>
+      <span class="text-right text-txt-2">${fmtI(t.qty)}</span>
+      <span class="text-right text-txt-3">${fmt(t.latency,1)}</span>
+      <span class="text-right text-txt-3">${timeStr.slice(3)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderFullTrades() {
+  const el = document.getElementById('fullTradesBody');
+  const countEl = document.getElementById('fullTradeCount');
+  if (!el) return;
+  const list = state.trades.slice(0, 200);
+  countEl.textContent = fmtI(state.totalMatched) + ' trades';
+  el.innerHTML = list.map(t => {
+    const ts = new Date(t.time);
+    const tsStr = ts.toLocaleTimeString('en-GB') + '.' + String(ts.getMilliseconds()).padStart(3,'0');
+    return `<tr class="border-b border-border/30 hover:bg-bg-hover">
+      <td class="px-3 py-1.5 text-txt-2">#${t.id}</td>
+      <td class="px-3 py-1.5 text-buy">#${t.buyId}</td>
+      <td class="px-3 py-1.5 text-sell">#${t.sellId}</td>
+      <td class="px-3 py-1.5 text-right text-txt-1 font-semibold">${fmt(t.price)}</td>
+      <td class="px-3 py-1.5 text-right text-txt-2">${fmtI(t.qty)}</td>
+      <td class="px-3 py-1.5 text-right text-warn">${fmt(t.latency,2)}</td>
+      <td class="px-3 py-1.5 text-right text-txt-3">${tsStr}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPerformance() {
+  const s = state.latencySamples;
+  if (!s.length) return;
+  document.getElementById('pLatest').textContent = fmt(s[s.length-1], 2);
+  document.getElementById('pMin').textContent    = fmt(Math.min(...s.slice(-1000)), 2);
+  document.getElementById('pAvg').textContent    = fmt(s.reduce((a,b)=>a+b,0)/s.length, 2);
+  document.getElementById('pMax').textContent    = fmt(Math.max(...s.slice(-1000)), 2);
+  document.getElementById('pP95').textContent    = fmt(percentile(s, 95), 2);
+  document.getElementById('pP99').textContent    = fmt(percentile(s, 99), 2);
+
+  // Histogram
+  if (histSeries) {
+    const last = s.slice(-1000);
+    const bins = 30;
+    const min = Math.min(...last), max = Math.max(...last);
+    const step = (max - min) / bins || 1;
+    const counts = new Array(bins).fill(0);
+    last.forEach(v => {
+      const idx = Math.min(bins-1, Math.floor((v - min) / step));
+      counts[idx]++;
+    });
+    const data = counts.map((c, i) => ({
+      time: Math.floor(Date.now()/1000) - (bins - i) * 2,
+      value: c,
+      color: i === Math.floor((percentile(last, 50) - min) / step) ? '#f59e0b' : '#3b82f6',
+    }));
+    histSeries.setData(data);
+  }
+
+  // Throughput
+  if (tpSeries && state.throughputSamples.length) {
+    tpSeries.setData(state.throughputSamples);
+  }
+}
+
+function renderSystem() {
+  const s = state.latencySamples;
+  const elapsed = (Date.now() - state.startTime) / 1000;
+  const ops = s.length ? s.length / elapsed : 0;
+  document.getElementById('sIncoming').textContent  = fmt(ops, 1) + ' ops/s';
+  document.getElementById('sProcessed').textContent = fmt(ops, 1) + ' ops/s';
+  document.getElementById('sMatched').textContent   = fmtI(state.totalMatched);
+  document.getElementById('sOpen').textContent      = fmtI(state.activeOrders);
+  document.getElementById('sBuffer').textContent    = fmt(Math.min(100, (state.activeOrders / 500) * 100), 1) + ' %';
+  document.getElementById('sErrors').textContent    = '0';
+  document.getElementById('sUptime').textContent    = formatUptime(elapsed);
+  document.getElementById('sClients').textContent   = '1';
+
+  // Event log
+  const logEl = document.getElementById('eventLog');
+  if (logEl) {
+    logEl.innerHTML = state.eventLog.map(e => {
+      const color = e.type === 'match' ? 'text-buy' : e.type === 'warn' ? 'text-warn' : 'text-txt-3';
+      return `<div class="flex gap-2"><span class="text-txt-3">[${e.t}]</span><span class="${color}">${e.type.toUpperCase().padEnd(6,' ')}</span><span class="text-txt-2">${e.msg}</span></div>`;
+    }).join('');
+  }
+}
+
+function renderLatencyChart() {
+  if (!latSeries) return;
+  const now = Math.floor(Date.now() / 1000);
+  const data = state.latencySamples.slice(-500).map((v, i, arr) => ({
+    time: now - (arr.length - i),
+    value: v,
+  }));
+  latSeries.setData(data);
+}
+
+function formatUptime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h) return `${h}h ${m}m ${s}s`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+// ---------- NAVIGATION ----------
+const views = ['overview','orderbook','trades','performance','system'];
+const titles = {
+  overview:    ['Overview',    'Real-time engine monitoring'],
+  orderbook:   ['Order Book',  'Full depth · price-time priority'],
+  trades:      ['Trades',      'Matched executions with latency'],
+  performance: ['Performance', 'Latency & throughput analytics'],
+  system:      ['System',      'Component health and runtime counters'],
+};
+function setActiveView(v) {
+  views.forEach(x => {
+    const el = document.getElementById('view-' + x);
+    if (el) el.classList.toggle('hidden', x !== v);
+  });
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    const active = b.dataset.nav === v;
+    b.classList.toggle('text-txt-1', active);
+    b.classList.toggle('text-txt-2', !active);
+    b.classList.toggle('bg-bg-hover', active);
+  });
+  document.getElementById('pageTitle').textContent = titles[v][0];
+  document.getElementById('pageSub').textContent   = titles[v][1];
+  if (v === 'orderbook') renderFullOrderBook();
+  if (v === 'trades') renderFullTrades();
+  if (v === 'performance') renderPerformance();
+  if (v === 'system') renderSystem();
+}
+document.querySelectorAll('.nav-btn').forEach(b => {
+  b.addEventListener('click', () => setActiveView(b.dataset.nav));
+});
+
+// ---------- CONTROLS ----------
+document.getElementById('simToggle').addEventListener('click', () => {
+  state.running = !state.running;
+  document.getElementById('simLabel').textContent = state.running ? 'Running' : 'Paused';
+  document.getElementById('simIcon').textContent  = state.running ? '■' : '▶';
+  const btn = document.getElementById('simToggle');
+  if (state.running) {
+    btn.classList.remove('bg-sell/10','text-sell','border-sell/30','hover:bg-sell/20');
+    btn.classList.add('bg-buy/10','text-buy','border-buy/30','hover:bg-buy/20');
+    document.getElementById('simStatus').textContent = 'ACTIVE';
+    document.getElementById('simStatus').className = 'text-[11px] text-buy font-medium';
+    logEvent('info', 'Simulator resumed');
+  } else {
+    btn.classList.remove('bg-buy/10','text-buy','border-buy/30','hover:bg-buy/20');
+    btn.classList.add('bg-sell/10','text-sell','border-sell/30','hover:bg-sell/20');
+    document.getElementById('simStatus').textContent = 'PAUSED';
+    document.getElementById('simStatus').className = 'text-[11px] text-sell font-medium';
+    logEvent('warn', 'Simulator paused');
+  }
+});
+document.getElementById('depthSelect')?.addEventListener('change', renderFullOrderBook);
+document.getElementById('clearTrades')?.addEventListener('click', () => {
+  state.trades = [];
+  renderFullTrades();
+  logEvent('info', 'Trade log cleared');
+});
+
+// ---------- CLOCK ----------
+function updateClock() {
+  const d = new Date();
+  document.getElementById('clock').textContent =
+    d.toLocaleTimeString('en-GB') + ' · ' +
+    d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  document.getElementById('lastUpdate').textContent = nowTs();
+  document.getElementById('uptime').textContent = formatUptime((Date.now() - state.startTime)/1000);
+}
+
+// ---------- MAIN LOOP ----------
+let lastThroughputSample = Date.now();
+let ordersInWindow = 0;
+
+function tick() {
+  if (state.running) {
+    // Generate 3-8 orders per tick (~60Hz)
+    const n = 3 + Math.floor(Math.random() * 6);
+    for (let i = 0; i < n; i++) {
+      const o = generateOrder();
+      const lat = processOrder(o);
+      ordersInWindow++;
+      if (o.price === state.lastTradePrice && state.trades[0]?.id === state.nextTradeId - 1) {
+        // A match happened
+        if (Math.random() < 0.1) logEvent('match', `Trade #${state.trades[0].id} @ ${fmt(state.trades[0].price)} × ${fmtI(state.trades[0].qty)} · ${fmt(lat,2)} µs`);
+      }
+    }
+    snapshotBook(20);
+
+    // Throughput sampling every 1s
+    const now = Date.now();
+    if (now - lastThroughputSample >= 1000) {
+      state.throughputSamples.push({
+        time: Math.floor(now / 1000),
+        value: ordersInWindow,
+      });
+      if (state.throughputSamples.length > 120) state.throughputSamples.shift();
+      ordersInWindow = 0;
+      lastThroughputSample = now;
+    }
+  }
+
+  // Render current view
+  renderKPIs();
+  renderOrderBookCompact();
+  renderRecentTrades();
+  renderLatencyChart();
+
+  const active = views.find(v => !document.getElementById('view-' + v).classList.contains('hidden'));
+  if (active === 'orderbook')    renderFullOrderBook();
+  if (active === 'trades')       renderFullTrades();
+  if (active === 'performance')  renderPerformance();
+  if (active === 'system')       renderSystem();
+}
+
+// ---------- BOOT ----------
+window.addEventListener('load', () => {
+  initCharts();
+  setActiveView('overview');
+  logEvent('info', 'ChronosMatch engine initialized');
+  logEvent('info', 'Shared memory IPC mapped (1 MB ring buffer)');
+  logEvent('info', 'Market simulator started in DEMO mode');
+  updateClock();
+  setInterval(updateClock, 1000);
+  setInterval(tick, 50); // ~20 ticks/sec, each generating multiple orders
+});
+</script>
+
+</body>
+</html>
